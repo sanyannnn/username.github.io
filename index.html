@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>NordOrd · 瑞典语背词</title>
+  <link rel="stylesheet" href="style.css" />
+  <!-- Google Fonts: DM Serif Display + DM Sans -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+  <!-- ─────────────────────────────────────────────
+       页面：Dashboard（首页）
+  ───────────────────────────────────────────── -->
+  <div id="page-dashboard" class="page active">
+    <header class="app-header">
+      <div class="logo-mark">N</div>
+      <div class="header-text">
+        <h1 class="app-title">NordOrd</h1>
+        <p class="app-sub">瑞典语单词本 · A1–B1</p>
+      </div>
+    </header>
+
+    <!-- 今日任务卡 -->
+    <section class="today-card card">
+      <div class="today-label">今日任务</div>
+      <div class="today-stats">
+        <div class="stat-item">
+          <span class="stat-num" id="stat-new">0</span>
+          <span class="stat-label">新词</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat-item">
+          <span class="stat-num" id="stat-review">0</span>
+          <span class="stat-label">待复习</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat-item">
+          <span class="stat-num" id="stat-done">0</span>
+          <span class="stat-label">已掌握</span>
+        </div>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar" id="progress-bar"></div>
+      </div>
+      <div class="progress-text" id="progress-text">完成率 0%</div>
+    </section>
+
+    <!-- 等级筛选 -->
+    <section class="level-section">
+      <p class="section-label">选择等级</p>
+      <div class="level-pills" id="level-pills">
+        <button class="pill active" data-level="all">全部</button>
+        <button class="pill" data-level="A1">A1</button>
+        <button class="pill" data-level="A2">A2</button>
+        <button class="pill" data-level="B1">B1</button>
+      </div>
+    </section>
+
+    <!-- 操作按钮 -->
+    <section class="action-section">
+      <button class="btn-primary" id="btn-start">
+        <span class="btn-icon">▶</span> 开始学习
+      </button>
+      <button class="btn-secondary" id="btn-wrong">
+        <span class="btn-icon">✕</span> 错题本
+        <span class="badge" id="wrong-badge">0</span>
+      </button>
+    </section>
+
+    <!-- 小提示 -->
+    <footer class="dash-footer">
+      <p>每日积累，北欧语感自然而来 ✦</p>
+    </footer>
+  </div>
+
+
+  <!-- ─────────────────────────────────────────────
+       页面：学习卡片
+  ───────────────────────────────────────────── -->
+  <div id="page-study" class="page">
+    <div class="study-nav">
+      <button class="nav-back" id="btn-back-study">← 返回</button>
+      <span class="study-progress-label" id="study-progress-label">1 / 10</span>
+      <div class="study-level-tag" id="study-mode-label">学习中</div>
+    </div>
+
+    <!-- 卡片区域 -->
+    <div class="card-area">
+      <div class="flip-card" id="flip-card">
+        <div class="flip-card-inner" id="flip-card-inner">
+
+          <!-- 正面 -->
+          <div class="flip-front card">
+            <div class="card-tags">
+              <span class="tag tag-level" id="card-level-tag">A1</span>
+              <span class="tag tag-type" id="card-type-tag">名词</span>
+            </div>
+            <div class="card-word" id="card-word">hej</div>
+            <button class="btn-speak" id="btn-speak-word" title="朗读单词">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="11,5 6,9 2,9 2,15 6,15 11,19" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+              </svg>
+              朗读
+            </button>
+            <button class="btn-reveal" id="btn-reveal">显示答案 ↓</button>
+          </div>
+
+          <!-- 背面 -->
+          <div class="flip-back card">
+            <div class="card-tags">
+              <span class="tag tag-level" id="card-level-tag-back">A1</span>
+              <span class="tag tag-type" id="card-type-tag-back">名词</span>
+            </div>
+            <div class="card-word-back" id="card-word-back">hej</div>
+
+            <div class="answer-block">
+              <div class="answer-zh" id="answer-zh">你好</div>
+              <div class="answer-fr" id="answer-fr">bonjour</div>
+            </div>
+
+            <div class="example-block">
+              <div class="example-row">
+                <button class="btn-speak-sm" id="btn-speak-example" title="朗读例句">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="11,5 6,9 2,9 2,15 6,15 11,19" />
+                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                  </svg>
+                </button>
+                <p class="example-sv" id="example-sv">Hej! Hur mår du?</p>
+              </div>
+              <p class="example-zh" id="example-zh">你好！你好吗？</p>
+              <p class="example-fr" id="example-fr">Bonjour ! Comment vas-tu ?</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- 判断按钮 -->
+    <div class="judge-btns" id="judge-btns">
+      <button class="btn-wrong-word" id="btn-dont-know">✕ 不认识</button>
+      <button class="btn-know-word" id="btn-know">✓ 认识</button>
+    </div>
+  </div>
+
+
+  <!-- ─────────────────────────────────────────────
+       页面：错题本
+  ───────────────────────────────────────────── -->
+  <div id="page-wrong" class="page">
+    <div class="study-nav">
+      <button class="nav-back" id="btn-back-wrong">← 返回</button>
+      <span class="study-progress-label">错题本</span>
+      <button class="btn-clear-wrong" id="btn-clear-wrong">清空</button>
+    </div>
+
+    <div id="wrong-list-wrap">
+      <div id="wrong-empty" class="wrong-empty">
+        <div class="empty-icon">✦</div>
+        <p>太棒了！暂无错题</p>
+      </div>
+      <ul id="wrong-list" class="wrong-list"></ul>
+    </div>
+
+    <div class="action-section" id="wrong-practice-wrap" style="display:none">
+      <button class="btn-primary" id="btn-practice-wrong">重新练习错题</button>
+    </div>
+  </div>
+
+
+  <script src="app.js"></script>
+</body>
+</html>
