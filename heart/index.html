@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!-- 手机适配：宽度=设备宽度，禁止缩放，适配刘海屏 -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>❤</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: radial-gradient(ellipse at 50% 45%, #111 0%, #050505 55%, #000 100%); /* 黑白夜空 */
+    touch-action: none;                    /* 手势全部交给我们自己处理 */
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+/* =====================================================================
+ *  流星雨 → 3D 爱心（双击变圣诞树）—— 纯 Canvas 2D，无任何依赖，离线可用
+ *
+ *  剧情（时间单位：秒）
+ *   0 ~ 2.5   黑白星空，中间一颗白色光点在“呼吸”
+ *   2.5 ~ 5   两颗彩色流星沿贝塞尔曲线从左上、右上飞向中心
+ *   5 ~ 11.5  流星雨落下，每一道雨丝落到爱心表面就“停住”，拼出 3D 爱心
+ *   之后      爱心跳动、旋转；背景偶尔放烟花
+ *  交互：拖动=旋转(有惯性)；单击=粒子炸开+冲击波+屏幕震动+手机振动；
+ *        双击=爱心 ⇄ 圣诞树 变形；第一次触摸开启科幻氛围音乐
+ *
+ *  用到的数学
+ *  1) 爱心曲线（参数方程）：x = 16 sin³t，y = 13cos t − 5cos 2t − 2cos 3t − cos 4t
+ *     把这条曲线按 c = √(1−u²) 缩放、再放到深度 z = u·D 上（u∈[−1,1]），
+ *     一层层叠起来就成了“鼓起来”的 3D 爱心。
+ *  2) 圆锥 + 螺旋（圣诞树）：r = R·h，θ = 2π·圈数·h，x = r cosθ，z = r sinθ
+ *  3) 旋转矩阵：绕 Y 轴 a 角   x' = x cos a + z sin a,  z' = −x sin a + z cos a
+ *              绕 X 轴 b 角   y'' = y cos b − z' sin b, z'' = y sin b + z' cos b
+ *  4) 透视投影：s = F / (F + z'')，屏幕坐标 = 中心 + (x', y'')·s·S  —— 近大远小
+ *  5) 二次贝塞尔曲线（流星轨迹）：B(t) = (1−t)²P0 + 2(1−t)t·P1 + t²·P2
+ *  6) 线性插值 lerp(a,b,k) = a + (b−a)·k：所有“变形”“飞入”都是它 + 缓动函数
+ * ===================================================================== */
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// ---------- 小工具 ----------
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, k) => a + (b - a) * k;
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeInOut = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+// ---------- 画布尺寸 & 高清屏 ----------
+let W, H, DPR, S, CX, CY;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);   // 最多 2 倍：清晰又不卡
+  W = innerWidth; H = innerHeight;
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  S = Math.min(W * 0.46, H * 0.32);                    // 1 个世界单位 = S 像素
+  CX = W / 2; CY = H * 0.47;
+  initSky();
+}
+
+// ---------- 预渲染发光贴图（比 shadowBlur 快得多） ----------
+function makeGlow(rgb, core = 0.18) {
+  const s = 64, c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  grd.addColorStop(0, 'rgba(255,255,255,1)');
+  grd.addColorStop(core, `rgba(${rgb},1)`);
+  grd.addColorStop(0.45, `rgba(${rgb},0.22)`);
+  grd.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, s, s);
+  return c;
+}
+// 爱心主色（粉/玫红/白）+ 彩色点缀（青/紫/金/青柠）
+const COLORS = {
+  pink: '255,95,175', rose: '255,40,130', light: '255,190,225', white: '255,255,255',
+  cyan: '80,230,255', violet: '170,110,255', gold: '255,205,90', lime: '170,255,90',
+};
+const SPR = {}; for (const k in COLORS) SPR[k] = makeGlow(COLORS[k]);
+const ACCENTS = ['cyan', 'violet', 'gold', 'lime', 'pink'];
+
+// 大块柔光（爱心中心的光晕、星云）
+function makeBlob(rgb) {
+  const s = 256, c = document.createElement('canvas'); c.width = c.height = s;
+  const g = c.getContext('2d'), grd = g.createRadialGradient(s/2, s/2, 0, s/2, s/2, s/2);
+  grd.addColorStop(0, `rgba(${rgb},1)`); grd.addColorStop(0.4, `rgba(${rgb},0.35)`); grd.addColorStop(1, `rgba(${rgb},0)`);
+  g.fillStyle = grd; g.fillRect(0, 0, s, s); return c;
+}
+const BLOB = { core: makeBlob('255,60,150'), cyan: makeBlob('60,200,255'), violet: makeBlob('140,80,255'), rose: makeBlob('255,60,140') };
+
+// ---------- 粒子：每个粒子同时记住“爱心位置”和“圣诞树位置” ----------
+const small = Math.min(innerWidth, innerHeight) < 500;
+const NUM = small ? 1900 : 2800;
+const D = 0.45;                                    // 爱心厚度
+const T_TOP = -1.12, T_H = 2.15, T_R = 0.82;       // 圣诞树：顶部、高度、底半径
+const F = 3.2;                                     // 相机距离
+const RAIN_START = 5.0, RAIN_END = 11.5, FALL = 0.9; // 流星雨时间 & 每道雨丝下落时长
+
+function heart2D(t) {             // 标准爱心曲线，归一化到宽约 2、上下居中
+  const x = 16 * Math.pow(Math.sin(t), 3);
+  const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+  return [x / 16, -(y + 2.5) / 16];  // 屏幕 y 向下，所以取负号
+}
+
+const parts = [];
+for (let i = 0; i < NUM; i++) {
+  // —— 爱心目标点 ——
+  const t = Math.random() * Math.PI * 2, kind = Math.random();
+  let u, k = 1;
+  if (kind < 0.55) u = rand(-0.12, 0.12);              // 55%：最外圈轮廓（最亮最密）
+  else if (kind < 0.9) u = rand(-1, 1);                // 35%：鼓起来的表面
+  else { u = rand(-0.4, 0.4); k = rand(0.15, 0.85); }  // 10%：内部稀疏亮点
+  const c = Math.sqrt(1 - u * u) * k;
+  const [hx, hy] = heart2D(t);
+  const hp = [hx * c + rand(-0.015, 0.015), hy * c + rand(-0.015, 0.015), u * D];
+
+  // —— 圣诞树目标点 ——
+  let tp, h;
+  if (Math.random() < 0.68) {                          // 树身：圆锥表面附近
+    h = Math.sqrt(Math.random());
+    const th = Math.random() * Math.PI * 2, r = T_R * h * (0.72 + 0.28 * Math.random());
+    tp = [r * Math.cos(th), T_TOP + T_H * h, r * Math.sin(th)];
+  } else {                                             // 彩带：两条斜着绕的螺旋
+    h = Math.random();
+    const th = 2 * Math.PI * 4 * h + (i % 2) * Math.PI, r = T_R * h * 1.12;
+    tp = [r * Math.cos(th), T_TOP + T_H * h, r * Math.sin(th)];
+  }
+
+  // 颜色：大部分粉色系，约 12% 彩色点缀
+  const cr = Math.random();
+  const col = cr < 0.12 ? ACCENTS[i % ACCENTS.length] : cr < 0.5 ? 'pink' : cr < 0.72 ? 'rose' : cr < 0.9 ? 'light' : 'white';
+
+  // 点击炸开的方向（随机单位向量 × 随机长度）
+  const a = Math.random() * 6.283, b = Math.acos(rand(-1, 1)), e = rand(0.35, 1.1);
+  parts.push({
+    hp, tp, col, spr: SPR[col],
+    size: kind < 0.55 ? rand(8, 15) : rand(5, 11),
+    tw: rand(1, 4), ph: rand(0, 6.28), sw: rand(0.6, 1.4),
+    land: lerp(RAIN_START + FALL, RAIN_END, Math.pow(Math.random(), 0.8)), // 这个粒子“落地”的时刻
+    dx: Math.sin(b) * Math.cos(a) * e, dy: Math.cos(b) * e, dz: Math.sin(b) * Math.sin(a) * e,
+  });
+}
+// 按颜色分组，方便一次性画同色雨丝（减少绘图状态切换）
+const COLOR_KEYS = Object.keys(COLORS);
+
+// ---------- 背景：黑白星空、星云、装饰雨丝 ----------
+let stars = [], wisps = [], deco = [];
+function initSky() {
+  stars = Array.from({ length: small ? 220 : 360 }, () => ({
+    x: Math.random() * W, y: Math.random() * H, r: Math.pow(Math.random(), 3) * 1.8 + 0.3,
+    g: Math.floor(rand(150, 255)), tw: rand(0.4, 2.5), ph: rand(0, 6.28), z: rand(0.2, 1),
+  }));
+  wisps = [['cyan', 0.25, 0.22], ['violet', 0.78, 0.7], ['rose', 0.2, 0.85]].map(([k, x, y]) => ({
+    img: BLOB[k], x: x * W, y: y * H, r: Math.max(W, H) * 0.55, ph: rand(0, 6.28),
+  }));
+}
+function newDeco() {   // 纯装饰的雨丝（白/灰），从屏幕顶部一直落到底
+  return { x: Math.random() * W, y: rand(-H * 0.6, -20), v: rand(900, 1500), len: rand(40, 120), g: Math.floor(rand(140, 255)) };
+}
+
+// ---------- 状态 ----------
+let time = 0, last = performance.now();
+let rotY = 0, rotVel = 0.18, tilt = 0.12;
+let morph = 0, morphTarget = 0, morphFrom = 0, morphStart = -10; // 0=爱心 1=树
+let burstAt = -10, shake = 0;
+let sparks = [], waves = [], fireworks = [], meteorsBg = [];
+window.__t = () => time;                         // 方便自动化测试读取时间
+
+// ---------- 交互 ----------
+let dragging = false, lastX = 0, lastY = 0, moved = 0, downT = 0, lastTap = { t: -10, x: 0, y: 0 };
+canvas.addEventListener('pointerdown', e => {
+  dragging = true; lastX = e.clientX; lastY = e.clientY; moved = 0; downT = time;
+  startMusic();                                  // 浏览器规定：必须用户触摸后才能出声
+});
+addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  moved += Math.abs(dx) + Math.abs(dy);
+  rotY += dx * 0.008; rotVel = dx * 0.5;         // 手指速度 → 角速度，松手后有惯性
+  tilt = clamp(tilt + dy * 0.003, -0.5, 0.6);
+  lastX = e.clientX; lastY = e.clientY;
+});
+addEventListener('pointerup', e => {
+  if (dragging && moved < 10 && time - downT < 0.4) {
+    const dbl = time - lastTap.t < 0.32 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 60;
+    if (dbl && time > RAIN_END) {               // 双击：爱心 ⇄ 圣诞树
+      morphFrom = morph; morphTarget = morphTarget ? 0 : 1; morphStart = time; lastTap.t = -10;
+      playWhoosh();
+    } else {
+      tap(e.clientX, e.clientY); lastTap = { t: time, x: e.clientX, y: e.clientY };
+    }
+  }
+  dragging = false;
+});
+function tap(x, y) {
+  burstAt = time; shake = 14;
+  const hue = ACCENTS[Math.floor(Math.random() * ACCENTS.length)];
+  waves.push({ x, y, r: 0, life: 1, col: COLORS[hue] }, { x, y, r: 0, life: 1.25, col: '255,255,255' });
+  for (let i = 0; i < 70; i++) {
+    const a = Math.random() * 6.283, v = rand(80, 380);
+    sparks.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, spr: SPR[ACCENTS[i % 5]], r: rand(5, 11) });
+  }
+  if (navigator.vibrate) navigator.vibrate(35);
+  playZap();
+}
+
+// ---------- 树顶五角星 ----------
+function drawStar(x, y, R, rot, alpha) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.globalAlpha = alpha;
+  ctx.drawImage(SPR.gold, -R * 3.5, -R * 3.5, R * 7, R * 7);
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 ? R * 0.45 : R, a = -Math.PI / 2 + i * Math.PI / 5;
+    ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  ctx.closePath(); ctx.fillStyle = '#fff6d8'; ctx.fill();
+  ctx.restore();
+}
+
+// ---------- 开场两颗流星：二次贝塞尔曲线 ----------
+function bez(p0, p1, p2, t) {
+  const m = 1 - t;
+  return [m * m * p0[0] + 2 * m * t * p1[0] + t * t * p2[0], m * m * p0[1] + 2 * m * t * p1[1] + t * t * p2[1]];
+}
+function introMeteor(side, t, col) {          // t: 0→1 飞行进度
+  const p0 = [side < 0 ? -0.1 * W : 1.1 * W, 0.04 * H];
+  const p1 = [side < 0 ? 0.15 * W : 0.85 * W, 0.42 * H];
+  const p2 = [CX, CY];
+  const N = 26;                                // 尾巴 = 往前若干个时刻的位置连起来
+  for (let i = N; i >= 0; i--) {
+    const tt = t - i * 0.012; if (tt < 0) continue;
+    const [x, y] = bez(p0, p1, p2, tt), f = 1 - i / N;
+    ctx.globalAlpha = f * 0.8;
+    const s = 4 + 14 * f;
+    ctx.drawImage(SPR[col], x - s / 2, y - s / 2, s, s);
+  }
+  const [x, y] = bez(p0, p1, p2, t);
+  ctx.globalAlpha = 1; ctx.drawImage(SPR.white, x - 14, y - 14, 28, 28);
+}
+
+// ---------- 主循环 ----------
+const P = [0, 0, 0];
+let quality = 1, fAcc = 0, fN = 0;
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05); last = now; time += dt;
+  if (time > 13 && time < 17) { fAcc += dt; fN++; }          // 自适应：太卡就少画一半
+  if (fN === 150 && fAcc / fN > 0.024) quality = 2;
+
+  if (!dragging) { rotVel += (0.3 - rotVel) * dt * 0.7; rotY += rotVel * dt; }
+  const ca = Math.cos(rotY), sa = Math.sin(rotY), cb = Math.cos(tilt), sb = Math.sin(tilt);
+
+  // 变形进度（3.5 秒） & 爆炸强度曲线（0.3 秒冲出去，1.8 秒缓缓收回）
+  const mk = clamp((time - morphStart) / 3.5, 0, 1);
+  morph = lerp(morphFrom, morphTarget, easeInOut(mk));
+  const swirl = Math.sin(Math.PI * easeInOut(mk)) * (morphFrom !== morphTarget ? 1 : 0); // 变形中途的龙卷风强度
+  const bt = time - burstAt;
+  const boom = bt < 0.3 ? easeOut(bt / 0.3) : bt < 2.1 ? 1 - easeInOut((bt - 0.3) / 1.8) : 0;
+  // 心跳：一秒多跳一下，用 sin 的高次方做出“咚”的尖峰
+  const beat = Math.pow(Math.abs(Math.sin(time * 2.6)), 14);
+  const pulse = 1 + 0.055 * beat * (1 - morph) * (time > RAIN_END ? 1 : 0);
+
+  // 屏幕震动
+  shake *= Math.pow(0.02, dt);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  if (shake > 0.3) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+  ctx.globalCompositeOperation = 'lighter';     // 叠加混合 → 发光
+
+  // 1. 星云薄雾（很淡的彩色）
+  for (const w of wisps) {
+    ctx.globalAlpha = 0.05 + 0.025 * Math.sin(time * 0.3 + w.ph);
+    const r = w.r * (1 + 0.05 * Math.sin(time * 0.2 + w.ph));
+    ctx.drawImage(w.img, w.x - r + Math.sin(time * 0.1 + w.ph) * 30, w.y - r, r * 2, r * 2);
+  }
+  // 2. 黑白星星（闪烁 + 随旋转轻微视差）
+  for (const s of stars) {
+    ctx.globalAlpha = 0.3 + 0.7 * Math.abs(Math.sin(time * s.tw + s.ph));
+    ctx.fillStyle = `rgb(${s.g},${s.g},${s.g})`;
+    let x = (s.x + rotY * 12 * s.z) % W; if (x < 0) x += W;
+    ctx.fillRect(x, s.y, s.r, s.r);
+  }
+  // 3. 偶尔的白色流星（爱心出现后）
+  if (time > RAIN_END && Math.random() < dt * 0.2) meteorsBg.push({ x: rand(0.3 * W, 1.2 * W), y: rand(0, 0.3 * H), life: 1 });
+  ctx.lineWidth = 1.2;
+  for (const m of meteorsBg) {
+    m.x -= 480 * dt; m.y += 260 * dt; m.life -= dt * 1.2;
+    ctx.globalAlpha = Math.max(m.life, 0); ctx.strokeStyle = '#ddd';
+    ctx.beginPath(); ctx.moveTo(m.x, m.y); ctx.lineTo(m.x + 80, m.y - 43); ctx.stroke();
+  }
+  meteorsBg = meteorsBg.filter(m => m.life > 0);
+
+  // 4. 背景烟花
+  updateFireworks(dt);
+
+  // 5. 开场：中心呼吸光点 + 两颗彩色流星
+  if (time < RAIN_START + 1.5) {
+    const a = time < 0.8 ? time / 0.8 : time > RAIN_START ? 1 - (time - RAIN_START) / 1.5 : 1;
+    const flash = time > 4.8 && time < 5.6 ? 1 - Math.abs(time - 5.0) / 0.6 : 0; // 两颗流星相撞的闪光
+    const r = 10 + 4 * Math.sin(time * 3) + flash * 60;
+    ctx.globalAlpha = clamp(a, 0, 1);
+    ctx.drawImage(SPR.white, CX - r, CY - r, r * 2, r * 2);
+    if (flash > 0) { ctx.globalAlpha = flash * 0.5; ctx.drawImage(BLOB.violet, CX - 160, CY - 160, 320, 320); }
+  }
+  if (time > 2.5 && time < 5.0) {
+    const t = easeInOut((time - 2.5) / 2.5);
+    introMeteor(-1, t, 'cyan'); introMeteor(1, t, 'rose');
+  }
+
+  // 6. 爱心中心的光晕（随心跳）
+  const formed = clamp((time - RAIN_START - 1) / (RAIN_END - RAIN_START), 0, 1);
+  if (formed > 0) {
+    const r = S * 1.1 * pulse;
+    ctx.globalAlpha = (0.32 + 0.2 * beat) * formed * (1 - morph);
+    ctx.drawImage(BLOB.core, CX - r, CY - r * 0.95, r * 2, r * 2);
+  }
+
+  // 7. 主角：粒子
+  const paths = {};                                  // 正在下落的雨丝，按颜色收集
+  const step = quality;
+  for (let i = 0; i < parts.length; i += step) {
+    const p = parts[i];
+    if (time < p.land - FALL) continue;             // 还没开始下落
+    // 当前目标 = 爱心和树之间插值
+    let x = lerp(p.hp[0], p.tp[0], morph) * pulse;
+    let y = lerp(p.hp[1], p.tp[1], morph) * pulse;
+    let z = lerp(p.hp[2], p.tp[2], morph) * pulse;
+    // 变形途中：绕 Y 轴额外转一圈半 + 向外扩散 → 龙卷风
+    if (swirl > 0) {
+      const ang = swirl * 4.5 * p.sw, c = Math.cos(ang), s = Math.sin(ang), ex = 1 + 0.7 * swirl * p.sw;
+      const nx = (x * c + z * s) * ex, nz = (-x * s + z * c) * ex;
+      x = nx; z = nz; y += Math.sin(p.ph + time * 3) * 0.15 * swirl;
+    }
+    // 点击炸开
+    if (boom > 0) { x += p.dx * boom; y += p.dy * boom; z += p.dz * boom; }
+    // 流星雨：还在下落的粒子在目标点正上方 fall 个单位处
+    const fallK = clamp((time - (p.land - FALL)) / FALL, 0, 1);
+    const fall = (1 - fallK * fallK) * 3.6;          // 加速下落（像重力）
+    const yTop = y - fall;
+
+    // 旋转 + 透视投影
+    const x1 = x * ca + z * sa, z1 = -x * sa + z * ca;
+    const y2 = yTop * cb - z1 * sb, z2 = yTop * sb + z1 * cb;
+    const s = F / (F + z2); if (s <= 0) continue;
+    const px = CX + x1 * S * s, py = CY + y2 * S * s;
+
+    if (fall > 0.001) {                              // 还在落：画雨丝（头+尾巴）
+      const tail = 0.25 + 0.6 * fallK;
+      (paths[p.col] ||= []).push(px, py, py - tail * S * s);
+      ctx.globalAlpha = 0.9;
+      ctx.drawImage(p.spr, px - 4, py - 4, 8, 8);
+      continue;
+    }
+    const depth = clamp(1.1 - (z2 + 1) * 0.3, 0.3, 1);
+    const tw = 0.7 + 0.3 * Math.sin(time * p.tw + p.ph);
+    const landFlash = time - p.land < 0.35 ? 1 + 2.5 * (1 - (time - p.land) / 0.35) : 1;
+    ctx.globalAlpha = depth * tw;
+    const sz = p.size * s * (S / 165) * landFlash;
+    ctx.drawImage(p.spr, px - sz / 2, py - sz / 2, sz, sz);
+  }
+  // 一次性画出所有同色雨丝
+  ctx.lineWidth = 1;
+  for (const k in paths) {
+    const a = paths[k]; ctx.strokeStyle = `rgb(${COLORS[k]})`; ctx.globalAlpha = 0.45;
+    ctx.beginPath();
+    for (let j = 0; j < a.length; j += 3) { ctx.moveTo(a[j], a[j + 1]); ctx.lineTo(a[j], a[j + 2]); }
+    ctx.stroke();
+  }
+  // 装饰雨丝：只在流星雨阶段出现
+  if (time > RAIN_START && time < RAIN_END - 0.8 && deco.length < (small ? 50 : 80)) deco.push(newDeco());
+  for (const d of deco) {
+    d.y += d.v * dt;
+    ctx.globalAlpha = 0.35; ctx.strokeStyle = `rgb(${d.g},${d.g},${d.g})`;
+    ctx.beginPath(); ctx.moveTo(d.x, d.y); ctx.lineTo(d.x, d.y - d.len); ctx.stroke();
+  }
+  deco = deco.filter(d => d.y - d.len < H);
+
+  // 8. 树顶星星（变成树时出现）
+  if (morph > 0.4) {
+    const ty = T_TOP - 0.08 - boom * 0.2;
+    const y2 = ty * cb, s = F / (F + ty * sb);
+    drawStar(CX, CY + y2 * S * s, S * 0.1 * (1 + 0.08 * Math.sin(time * 3)), Math.sin(time * 0.8) * 0.3, (morph - 0.4) / 0.6);
+  }
+
+  // 9. 点击特效：冲击波圆环 + 彩色火花
+  for (const w of waves) {
+    w.r += 700 * dt; w.life -= dt * 1.3;
+    ctx.globalAlpha = Math.max(w.life, 0) * 0.8; ctx.strokeStyle = `rgb(${w.col})`; ctx.lineWidth = 3 * Math.max(w.life, 0) + 0.5;
+    ctx.beginPath(); ctx.arc(w.x, w.y, w.r * (w.col === '255,255,255' ? 0.7 : 1), 0, 6.283); ctx.stroke();
+  }
+  waves = waves.filter(w => w.life > 0);
+  for (const sp of sparks) {
+    sp.x += sp.vx * dt; sp.y += sp.vy * dt; sp.vy += 200 * dt; sp.vx *= 0.97; sp.life -= dt * 0.9;
+    ctx.globalAlpha = Math.max(sp.life, 0);
+    ctx.drawImage(sp.spr, sp.x - sp.r / 2, sp.y - sp.r / 2, sp.r, sp.r);
+  }
+  sparks = sparks.filter(sp => sp.life > 0);
+
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  requestAnimationFrame(frame);
+}
+
+// ---------- 烟花：先升空，再炸成一圈彩色粒子（受重力下落） ----------
+let nextFw = RAIN_END + 1.5;
+function updateFireworks(dt) {
+  if (time > nextFw) {
+    nextFw = time + rand(1.8, 4);
+    fireworks.push({ x: rand(0.12, 0.88) * W, y: H + 10, ty: rand(0.08, 0.3) * H, vy: -rand(650, 850), col: ACCENTS[Math.floor(Math.random() * 5)], bits: null });
+  }
+  for (const f of fireworks) {
+    if (!f.bits) {                              // 升空阶段
+      f.y += f.vy * dt; f.vy += 300 * dt;
+      ctx.globalAlpha = 0.8; ctx.drawImage(SPR[f.col], f.x - 4, f.y - 4, 8, 8);
+      if (f.y <= f.ty || f.vy > -60) {
+        f.bits = Array.from({ length: small ? 55 : 80 }, (_, i) => {
+          const a = Math.random() * 6.283, v = rand(60, 230);
+          return { x: f.x, y: f.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, spr: Math.random() < 0.25 ? SPR.white : SPR[f.col] };
+        });
+        f.life = 1;
+      }
+    } else {                                    // 爆炸阶段
+      f.life -= dt * 0.55;
+      for (const b of f.bits) {
+        b.x += b.vx * dt; b.y += b.vy * dt; b.vx *= 0.985; b.vy = b.vy * 0.985 + 60 * dt;
+        ctx.globalAlpha = Math.max(f.life, 0) * 0.8;
+        ctx.drawImage(b.spr, b.x - 6, b.y - 6, 12, 12);
+      }
+    }
+  }
+  fireworks = fireworks.filter(f => !f.bits || f.life > 0);
+}
+
+/* =====================================================================
+ *  科幻氛围音乐：全部用 Web Audio 现场合成（不需要音频文件）
+ *  - 铺底 Pad：每个和弦 3 个音 × 2 个微微走音的锯齿波 → 低通滤波器（被慢速 LFO 扫动）
+ *  - 琶音：三角波“滴滴”声，送进回声(延迟+反馈)，空间感
+ *  - 低音：正弦波
+ *  和弦进行 Am – F – C – G，每个和弦 8 秒
+ * ===================================================================== */
+let AC = null, master, echo, padFilter, musicTimer, nextChord = 0, chordIdx = 0, nextArp = 0;
+const midi = n => 440 * Math.pow(2, (n - 69) / 12);
+const CHORDS = [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]]; // Am F C G
+const CHORD_LEN = 8;
+function startMusic() {
+  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  AC = new (window.AudioContext || window.webkitAudioContext)();
+  master = AC.createGain(); master.gain.value = 0.0001;
+  master.gain.exponentialRampToValueAtTime(0.8, AC.currentTime + 3);   // 3 秒淡入
+  const comp = AC.createDynamicsCompressor(); master.connect(comp).connect(AC.destination);
+  // 回声：delay → 低通 → 反馈回 delay
+  echo = AC.createDelay(2); echo.delayTime.value = 0.375;
+  const fb = AC.createGain(); fb.gain.value = 0.45;
+  const eLp = AC.createBiquadFilter(); eLp.type = 'lowpass'; eLp.frequency.value = 2500;
+  echo.connect(eLp).connect(fb).connect(echo); eLp.connect(master);
+  // Pad 用的滤波器 + LFO（让音色像在“呼吸”）
+  padFilter = AC.createBiquadFilter(); padFilter.type = 'lowpass'; padFilter.frequency.value = 900; padFilter.Q.value = 6;
+  const lfo = AC.createOscillator(), lfoG = AC.createGain();
+  lfo.frequency.value = 0.08; lfoG.gain.value = 600; lfo.connect(lfoG).connect(padFilter.frequency); lfo.start();
+  padFilter.connect(master);
+  nextChord = nextArp = AC.currentTime + 0.1;
+  musicTimer = setInterval(scheduleMusic, 100);
+}
+function scheduleMusic() {
+  const now = AC.currentTime;
+  while (nextChord < now + 0.5) {                 // 排下一个和弦
+    const ch = CHORDS[chordIdx % 4], t = nextChord;
+    for (const n of ch) for (const det of [-7, 7]) {
+      const o = AC.createOscillator(), g = AC.createGain();
+      o.type = 'sawtooth'; o.frequency.value = midi(n); o.detune.value = det;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(0.035, t + 2.5);
+      g.gain.setValueAtTime(0.035, t + CHORD_LEN - 1);
+      g.gain.linearRampToValueAtTime(0.0001, t + CHORD_LEN + 1.5);
+      o.connect(g).connect(padFilter); o.start(t); o.stop(t + CHORD_LEN + 1.6);
+    }
+    const b = AC.createOscillator(), bg = AC.createGain();   // 低音
+    b.type = 'sine'; b.frequency.value = midi(ch[0] - 24);
+    bg.gain.setValueAtTime(0.0001, t); bg.gain.linearRampToValueAtTime(0.18, t + 1.5);
+    bg.gain.linearRampToValueAtTime(0.0001, t + CHORD_LEN + 0.5);
+    b.connect(bg).connect(master); b.start(t); b.stop(t + CHORD_LEN + 0.6);
+    nextChord += CHORD_LEN; chordIdx++;
+  }
+  while (nextArp < now + 0.5) {                   // 排琶音（八分音符，偶尔休止）
+    const ch = CHORDS[Math.floor((nextArp - (nextChord - CHORD_LEN * chordIdx)) / CHORD_LEN) % 4] || CHORDS[0];
+    if (Math.random() < 0.7) {
+      const n = ch[Math.floor(Math.random() * 3)] + 12 * (1 + Math.floor(Math.random() * 2));
+      pluck(midi(n), nextArp, 0.05);
+    }
+    nextArp += 0.25;
+  }
+}
+function pluck(freq, t, vol) {
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = 'triangle'; o.frequency.value = freq;
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.6);
+  o.connect(g); g.connect(master); g.connect(echo);
+  o.start(t); o.stop(t + 0.65);
+}
+function playZap() {                              // 点击音效：频率从高往低“咻——”
+  if (!AC) return;
+  const t = AC.currentTime, o = AC.createOscillator(), g = AC.createGain();
+  o.type = 'sine'; o.frequency.setValueAtTime(1400, t); o.frequency.exponentialRampToValueAtTime(70, t + 0.35);
+  g.gain.setValueAtTime(0.25, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+  o.connect(g); g.connect(master); g.connect(echo); o.start(t); o.stop(t + 0.42);
+}
+function playWhoosh() {                           // 变形音效：频率由低往高“嗡——”
+  if (!AC) return;
+  const t = AC.currentTime, o = AC.createOscillator(), g = AC.createGain(), f = AC.createBiquadFilter();
+  o.type = 'sawtooth'; o.frequency.setValueAtTime(80, t); o.frequency.exponentialRampToValueAtTime(600, t + 2.5);
+  f.type = 'lowpass'; f.frequency.setValueAtTime(300, t); f.frequency.exponentialRampToValueAtTime(3000, t + 2.5);
+  g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.08, t + 1.5); g.gain.linearRampToValueAtTime(0.0001, t + 3);
+  o.connect(f).connect(g); g.connect(master); g.connect(echo); o.start(t); o.stop(t + 3.1);
+}
+document.addEventListener('visibilitychange', () => {   // 切到后台时静音
+  if (AC) document.hidden ? AC.suspend() : AC.resume();
+});
+
+addEventListener('resize', resize);
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
